@@ -2,7 +2,31 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
 
-type Status = "loading" | "not_found" | "disabled" | "expired" | "server_error" | "redirecting";
+type Status = "loading" | "not_found" | "disabled" | "redirecting";
+
+function parseDevice(ua: string): string {
+  if (/tablet|ipad/i.test(ua)) return "Tablet";
+  if (/mobile|iphone|android/i.test(ua)) return "Mobile";
+  return "Desktop";
+}
+
+function parseBrowser(ua: string): string {
+  if (/edg\//i.test(ua)) return "Edge";
+  if (/opr\/|opera/i.test(ua)) return "Opera";
+  if (/firefox|fxios/i.test(ua)) return "Firefox";
+  if (/chrome|chromium|crios/i.test(ua)) return "Chrome";
+  if (/safari/i.test(ua)) return "Safari";
+  return "Other";
+}
+
+function parseOs(ua: string): string {
+  if (/windows/i.test(ua)) return "Windows";
+  if (/android/i.test(ua)) return "Android";
+  if (/iphone|ipad|ipod/i.test(ua)) return "iOS";
+  if (/macintosh|mac os/i.test(ua)) return "macOS";
+  if (/linux/i.test(ua)) return "Linux";
+  return "Other";
+}
 
 export default function RedirectPage() {
   const { slug } = useParams();
@@ -15,8 +39,6 @@ export default function RedirectPage() {
     }
 
     const cacheKey = `linkly:redirect:${slug}`;
-
-    // De-duplicate: refresh in the same session shouldn't double-count.
     try {
       const cached = sessionStorage.getItem(cacheKey);
       if (cached) {
@@ -30,57 +52,53 @@ export default function RedirectPage() {
     let cancelled = false;
 
     (async () => {
-      let data: { ok?: boolean; reason?: string; destination_url?: string } | null = null;
-      let error: unknown = null;
+      const { data: link, error } = await supabase
+        .from("links")
+        .select("id, destination_url, active, total_clicks")
+        .eq("slug", slug)
+        .maybeSingle();
 
-      // Hard timeout so the page never sits on a blank screen forever.
+      if (cancelled) return;
+      if (error || !link) {
+        setStatus("not_found");
+        return;
+      }
+      if (!link.active) {
+        setStatus("disabled");
+        return;
+      }
+
+      const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+      const isBot = /bot|crawl|spider|slurp|preview/i.test(ua);
+      const referrer =
+        typeof document !== "undefined" && document.referrer ? document.referrer : "Direct";
+
       try {
-        const result = await Promise.race([
-          supabase.functions.invoke("redirect-link", {
-            body: {
-              slug,
-              userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "",
-              referrer: typeof document !== "undefined" ? document.referrer : "",
-            },
-          }),
-          new Promise<{ data: null; error: Error }>((resolve) =>
-            setTimeout(() => resolve({ data: null, error: new Error("timeout") }), 10000)
-          ),
-        ]);
-        data = result.data;
-        error = result.error;
-      } catch (e) {
-        error = e;
+        await supabase.from("clicks").insert({
+          link_id: link.id,
+          device: parseDevice(ua),
+          browser: parseBrowser(ua),
+          os: parseOs(ua),
+          referrer,
+          is_bot: isBot,
+          clicked_at: new Date().toISOString(),
+        });
+        await supabase
+          .from("links")
+          .update({ total_clicks: (link.total_clicks ?? 0) + 1 })
+          .eq("id", link.id);
+      } catch {
+        /* analytics are best-effort */
       }
 
       if (cancelled) return;
-
-      if (error) {
-        setStatus("server_error");
-        return;
-      }
-
-      if (!data || data.ok === false || !data.destination_url) {
-        const reason = data?.reason;
-        setStatus(
-          reason === "disabled"
-            ? "disabled"
-            : reason === "expired"
-              ? "expired"
-              : reason === "server_error"
-                ? "server_error"
-                : "not_found"
-        );
-        return;
-      }
-
       setStatus("redirecting");
       try {
-        sessionStorage.setItem(cacheKey, data.destination_url);
+        sessionStorage.setItem(cacheKey, link.destination_url);
       } catch {
         /* ignore */
       }
-      window.location.replace(data.destination_url);
+      window.location.replace(link.destination_url);
     })();
 
     return () => {
@@ -88,7 +106,6 @@ export default function RedirectPage() {
     };
   }, [slug]);
 
-  // While resolving (or mid-redirect) show a plain white page — no branding, no spinner.
   if (status === "loading" || status === "redirecting") {
     return <div className="min-h-screen bg-white" />;
   }
@@ -104,21 +121,7 @@ export default function RedirectPage() {
       title: "This link has been disabled",
       desc: "The owner turned this link off. It's not currently active.",
     },
-    expired: {
-      icon: "ri-time-line",
-      title: "This link has expired",
-      desc: "The owner set an expiration date that has already passed.",
-    },
-    server_error: {
-      icon: "ri-server-line",
-      title: "Something went wrong",
-      desc: "We couldn't process this link right now. Please try again in a moment.",
-    },
-  }[status] || {
-    icon: "ri-link-unlink-m",
-    title: "Link not found",
-    desc: "This short link doesn't exist or may have been removed.",
-  };
+  }[status];
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-white px-4 text-center">
