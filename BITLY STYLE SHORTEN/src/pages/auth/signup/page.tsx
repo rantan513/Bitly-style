@@ -7,11 +7,10 @@ import { getCallbackUrl } from "@/lib/auth";
 
 export default function Signup() {
   const navigate = useNavigate();
-  const { signUp, verifySignupOtp } = useAuth();
-  const [step, setStep] = useState<"form" | "code">("form");
+  const { signUp } = useAuth();
+  const [step, setStep] = useState<"form" | "checkEmail">("form");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [token, setToken] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -36,25 +35,9 @@ export default function Signup() {
       return;
     }
 
-    // Still needs a code — show the code-entry form.
-    setStep("code");
+    // Confirmation email sent — show the check-your-email screen.
+    setStep("checkEmail");
     setLoading(false);
-  };
-
-  const handleVerify = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setLoading(true);
-
-    const error = await verifySignupOtp(email, token);
-
-    if (error) {
-      setError(error.message);
-      setLoading(false);
-      return;
-    }
-
-    navigate("/dashboard", { replace: true });
   };
 
   const handleResend = async () => {
@@ -69,40 +52,40 @@ export default function Signup() {
     if (error) setError(error.message);
   };
 
-  if (step === "code") {
+  const handleContinue = async () => {
+    setError(null);
+    setLoading(true);
+    // Session syncs across tabs, so once the email link is clicked
+    // this tab will see the session too.
+    const { data } = await supabase.auth.getSession();
+    if (data.session) {
+      navigate("/dashboard", { replace: true });
+      return;
+    }
+    setError("Not confirmed yet — click the link in your email first, then try again.");
+    setLoading(false);
+  };
+
+  if (step === "checkEmail") {
     return (
       <AuthShell
         title="Check your email."
-        subtitle="We sent a 6-digit code. Enter it below to confirm your account."
+        subtitle={`We sent a confirmation link to ${email}. Click it to activate your account, then come back here.`}
       >
-        <form onSubmit={handleVerify} className="space-y-5">
+        <div className="space-y-5">
           {error && (
             <div className="bg-primary-100/60 border border-primary-200 text-primary-800 rounded-md px-4 py-3 text-sm">
               {error}
             </div>
           )}
-          <div>
-            <label htmlFor="token" className="block text-sm font-medium text-foreground-800 mb-1.5">
-              Verification code
-            </label>
-            <input
-              id="token"
-              type="text"
-              inputMode="numeric"
-              value={token}
-              onChange={(e) => setToken(e.target.value.replace(/\D/g, "").slice(0, 6))}
-              required
-              placeholder="123456"
-              className="w-full bg-background-50 border border-background-300 rounded-md px-4 py-3 text-sm tracking-[0.4em] text-center text-foreground-950 placeholder:text-foreground-400 outline-none focus:border-primary-500 focus:ring-2 focus:ring-primary-100"
-            />
-          </div>
 
           <button
-            type="submit"
-            disabled={loading || token.length !== 6}
+            type="button"
+            onClick={handleContinue}
+            disabled={loading}
             className="w-full bg-foreground-950 hover:bg-foreground-800 disabled:opacity-60 text-background-50 rounded-md py-3 text-sm font-medium whitespace-nowrap cursor-pointer transition-colors"
           >
-            {loading ? "Verifying..." : "Verify & continue"}
+            {loading ? "Checking..." : "I've clicked the link — continue"}
           </button>
 
           <div className="text-center text-sm text-foreground-600">
@@ -113,7 +96,7 @@ export default function Signup() {
               disabled={resending}
               className="text-primary-600 hover:text-primary-700 font-medium cursor-pointer disabled:opacity-60"
             >
-              {resending ? "Resending..." : "Resend code"}
+              {resending ? "Resending..." : "Resend email"}
             </button>
             {" "}·{" "}
             <button
@@ -124,7 +107,7 @@ export default function Signup() {
               Change email
             </button>
           </div>
-        </form>
+        </div>
       </AuthShell>
     );
   }
