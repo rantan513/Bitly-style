@@ -10,6 +10,18 @@ function parseDevice(ua: string): string {
   return "Desktop";
 }
 
+function parseDeviceModel(ua: string): string {
+  if (/iPhone/i.test(ua)) return "iPhone";
+  if (/iPad/i.test(ua)) return "iPad";
+  if (/SM-S/i.test(ua)) return "Samsung Galaxy";
+  if (/Pixel/i.test(ua)) return "Google Pixel";
+  if (/Android/i.test(ua)) return "Android Phone";
+  if (/Windows/i.test(ua)) return "Windows PC";
+  if (/Mac OS X|macOS|Macintosh/i.test(ua)) return "Mac";
+  if (/Linux/i.test(ua)) return "Linux PC";
+  return "Desktop";
+}
+
 function parseBrowser(ua: string): string {
   if (/edg\//i.test(ua)) return "Edge";
   if (/opr\/|opera/i.test(ua)) return "Opera";
@@ -26,6 +38,31 @@ function parseOs(ua: string): string {
   if (/macintosh|mac os/i.test(ua)) return "macOS";
   if (/linux/i.test(ua)) return "Linux";
   return "Other";
+}
+
+// Free geo lookup — no API key needed, works from the browser.
+async function lookupGeo(): Promise<{
+  ip: string | null;
+  country: string | null;
+  region: string | null;
+  city: string | null;
+  isp: string | null;
+} | null> {
+  try {
+    const res = await fetch("https://ipwho.is/", { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.success) return null;
+    return {
+      ip: data.ip ? String(data.ip) : null,
+      country: data.country ? String(data.country) : null,
+      region: data.region ? String(data.region) : null,
+      city: data.city ? String(data.city) : null,
+      isp: data.connection?.isp ? String(data.connection.isp) : null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export default function RedirectPage() {
@@ -69,14 +106,22 @@ export default function RedirectPage() {
       }
 
       const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
-      const isBot = /bot|crawl|spider|slurp|preview/i.test(ua);
+      const isBot = /bot|crawl|spider|slurp|preview|headless/i.test(ua);
       const referrer =
         typeof document !== "undefined" && document.referrer ? document.referrer : "Direct";
 
+      // Geo lookup + click insert, both best-effort (never block the redirect).
       try {
+        const geo = await lookupGeo();
         await supabase.from("clicks").insert({
           link_id: link.id,
+          ip_address: geo?.ip ?? null,
+          country: geo?.country ?? null,
+          region: geo?.region ?? null,
+          city: geo?.city ?? null,
+          isp: geo?.isp ?? null,
           device: parseDevice(ua),
+          device_model: parseDeviceModel(ua),
           browser: parseBrowser(ua),
           os: parseOs(ua),
           referrer,
